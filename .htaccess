@@ -1,0 +1,10 @@
+# .htaccess — route everything to index.php (router)
+RewriteEngine On
+
+# Serve existing files/directories as-is
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Otherwise route to index.php (it will handle pretty routes)
+RewriteRule ^ index.php [QSA,L]
