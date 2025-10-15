@@ -1,0 +1,11 @@
+# Ignore local storage of webhook payloads and uploads
+storage/
+
+# Common OS/editor cruft
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/
+node_modules/
+vendor/
