@@ -105,15 +105,27 @@ if (isset($_GET['partial']) && $_GET['partial'] === '1') {
 <title>Mini Webhook Viewer — <?=h($id)?></title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
+/* Dark theme */
 body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   margin: 24px;
-  line-height: 1.45
+  line-height: 1.45;
+  background: #0f1216;
+  color: #e5e7eb;
 }
 
 code,
 pre {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+pre {
+  background: #0b0f14;
+  color: #d1d5db;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 10px;
+  overflow: auto;
 }
 
 .row {
@@ -123,14 +135,15 @@ pre {
 }
 
 .card {
-  border: 1px solid #ddd;
+  background: #161a20;
+  border: 1px solid #2a2f36;
   border-radius: 12px;
   padding: 16px;
   margin: 16px 0
 }
 
 .list tr {
-  border-bottom: 1px solid #eee
+  border-bottom: 1px solid #2a2f36
 }
 
 .list th,
@@ -144,25 +157,27 @@ pre {
   display: inline-block;
   padding: 2px 8px;
   border-radius: 999px;
-  border: 1px solid #999;
-  font-size: 12px
+  border: 1px solid #4b5563;
+  font-size: 12px;
+  color: #cbd5e1;
 }
 
 .muted {
-  color: #777
+  color: #9aa3af
 }
 
 .file-link {
-  color: #1f4;
+  color: #60a5fa;
   text-decoration: none
 }
 
 .file-link:hover {
+  color: #93c5fd;
   text-decoration: underline
 }
 
 .active-row {
-  background: #fffce6
+  background: #18222f
 }
 
 details {
@@ -179,9 +194,25 @@ details {
 .btn {
   display: inline-block;
   padding: 6px 10px;
-  border: 1px solid #333;
+  border: 1px solid #3b3f46;
   border-radius: 8px;
-  text-decoration: none
+  text-decoration: none;
+  color: #e5e7eb;
+  background: transparent;
+}
+
+.btn:hover {
+  background: #1f2937
+}
+
+.gh-link {
+  color: #a78bfa;
+  text-decoration: none;
+}
+
+.gh-link:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
 }
 </style>
 
@@ -191,9 +222,11 @@ details {
     <div><strong>ID:</strong> <code><?=h($id)?></code></div>
     <div>Receive: <code><?=h($hookURL)?></code></div>
     <div>View: <code><?=h($viewURL)?></code></div>
-    <label style="margin-left:auto"><input type="checkbox" id="auto"> Auto-refresh (2s)</label>
+    <span style="flex:1"></span>
+    <a class="gh-link" href="https://github.com/akhmadnuzula/webhook" target="_blank" rel="noopener">Public Repo</a>
+    <label><input type="checkbox" id="auto"> Auto-refresh (2s)</label>
   </div>
-  <div class="card" style="background:#fafafa;margin-top:12px">
+  <div class="card" style="margin-top:12px">
     <strong>cURL test</strong>
     <pre>curl -X POST '<?=h($hookURL)?>' \
   -H 'Content-Type: application/json' \

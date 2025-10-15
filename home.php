@@ -21,10 +21,13 @@ $viewQuery  = $base . '/viewer.php?id=' . $id;  // fallback
 <title>Mini Webhook — New ID</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
+/* Dark theme */
 body {
   font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   margin: 24px;
-  line-height: 1.45
+  line-height: 1.45;
+  background: #0f1216;
+  color: #e5e7eb;
 }
 
 code,
@@ -33,8 +36,18 @@ pre {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace
 }
 
+pre {
+  background: #0b0f14;
+  color: #d1d5db;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 10px;
+  overflow: auto;
+}
+
 .card {
-  border: 1px solid #ddd;
+  background: #161a20;
+  border: 1px solid #2a2f36;
   border-radius: 12px;
   padding: 16px;
   margin: 16px 0
@@ -49,9 +62,25 @@ pre {
 .btn {
   display: inline-block;
   padding: 8px 12px;
-  border: 1px solid #333;
+  border: 1px solid #3b3f46;
   border-radius: 8px;
-  text-decoration: none
+  text-decoration: none;
+  color: #e5e7eb;
+  background: transparent;
+}
+
+.btn:hover {
+  background: #1f2937
+}
+
+.gh-link {
+  color: #a78bfa;
+  text-decoration: none;
+}
+
+.gh-link:hover {
+  color: #c4b5fd;
+  text-decoration: underline;
 }
 </style>
 
@@ -70,12 +99,12 @@ pre {
     <a class="btn" href="<?=$viewPretty?>">Open Viewer</a>
     <a class="btn" href="<?=$viewQuery?>">Open Viewer (fallback)</a>
   </div>
+  <p class="muted">Repository: <a class="gh-link" href="https://github.com/akhmadnuzula/webhook" target="_blank" rel="noopener">github.com/akhmadnuzula/webhook</a></p>
   <p style="margin-top:8px" class="muted">Tip: Simpan URL <strong>View</strong> agar kamu bisa memantau request yang masuk.</p>
-  <div class="card" style="background:#fafafa;margin-top:12px">
+  <div class="card" style="margin-top:12px">
     <strong>Quick test (cURL)</strong>
     <pre>curl -X POST '<?=$hookPretty?>' \
   -H 'Content-Type: application/json' \
   -d '{"event":"ping","data":{"hello":"world"}}'</pre>
   </div>
 </div>
-
