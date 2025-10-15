@@ -12,6 +12,10 @@ function starts_with_path($path, $base){
 
 // ====== Inputs ======
 $id = preg_replace('~[^A-Za-z0-9_-]~', '', $_GET['id'] ?? '');
+// Prevent caching so auto-refresh always sees latest list
+@header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+@header('Pragma: no-cache');
+@header('Expires: 0');
 if ($id === '') { http_response_code(400); echo 'Missing id'; exit; }
 
 $storage = __DIR__ . '/storage/' . $id;
@@ -242,7 +246,7 @@ details {
 const viewURL = <?=json_encode($viewURL)?>;
 const id = <?=json_encode($id)?>;
 const qs = new URLSearchParams(location.search);
-const table = document.getElementById('files-table');
+let table = document.getElementById('files-table');
 
 function removePreviewRow() {
   const existing = document.querySelector('#files-table tr.preview-row');
@@ -334,7 +338,7 @@ async function refreshList() {
   if (!auto.checked || !table) return;
   // Reload current page but only the list section by refetching HTML and extracting the table
   try {
-    const res = await fetch(location.href, {
+    const res = await fetch((location.href + (location.href.includes('?') ? '&' : '?') + '_ts=' + Date.now()), {
       headers: {
         'X-Requested-With': 'fetch'
       }
@@ -345,6 +349,7 @@ async function refreshList() {
     const newTable = tpl.content.querySelector('#files-table');
     if (newTable) {
       table.replaceWith(newTable);
+      table = newTable;
       // re-highlight if selected
       const f = (new URL(location.href)).searchParams.get('f');
       if (f) {
