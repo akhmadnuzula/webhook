@@ -59,27 +59,27 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
   <p class="muted" style="margin:6px 0"><?=h($json['path'] ?? '')?></p>
 
   <details open>
-    <summary><strong>Headers</strong></summary>
+    <summary><strong>Headers</strong> <button type="button" class="btn copy-btn js-copy">Copy</button></summary>
     <pre><?=h(json_encode($json['headers'] ?? new stdClass, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES))?></pre>
   </details>
   <details>
-    <summary><strong>Query</strong></summary>
+    <summary><strong>Query</strong> <button type="button" class="btn copy-btn js-copy">Copy</button></summary>
     <pre><?=h(json_encode($json['query'] ?? new stdClass, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES))?></pre>
   </details>
   <details>
-    <summary><strong>Form</strong></summary>
+    <summary><strong>Form</strong> <button type="button" class="btn copy-btn js-copy">Copy</button></summary>
     <pre><?=h(json_encode($json['form'] ?? new stdClass, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES))?></pre>
   </details>
   <details>
-    <summary><strong>JSON (parsed)</strong></summary>
+    <summary><strong>JSON (parsed)</strong> <button type="button" class="btn copy-btn js-copy">Copy</button></summary>
     <pre><?=h(json_encode($json['json'] ?? new stdClass, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))?></pre>
   </details>
   <details>
-    <summary><strong>Raw Body</strong></summary>
+    <summary><strong>Raw Body</strong> <button type="button" class="btn copy-btn js-copy">Copy</button></summary>
     <pre><?=h($json['raw'] ?? '')?></pre>
   </details>
   <details>
-    <summary><strong>Files</strong></summary>
+    <summary><strong>Files</strong> <button type="button" class="btn copy-btn js-copy">Copy</button></summary>
     <pre><?=h(json_encode($json['files'] ?? [], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES))?></pre>
     <p class="muted">Saved under <code>storage/<?=h($id)?>/uploads/</code></p>
   </details>
@@ -203,6 +203,18 @@ details {
 
 .btn:hover {
   background: #1f2937
+}
+
+.copy-btn {
+  font-size: 12px;
+  padding: 2px 8px;
+  margin-left: 8px;
+  border-color: #4b5563;
+}
+
+.copy-btn.copied {
+  color: #10b981;
+  border-color: #10b981;
 }
 
 .gh-link {
@@ -332,6 +344,38 @@ document.addEventListener('click', async (e) => {
   history.pushState({
     f
   }, '', newURL);
+});
+
+// copy button on details summary
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button.js-copy');
+  if (!btn) return;
+  e.preventDefault();
+  const details = btn.closest('details');
+  const pre = details ? details.querySelector('pre') : null;
+  if (!pre) return;
+  const text = pre.innerText || pre.textContent || '';
+  let ok = false;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    } catch (_) {}
+  }
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); ok = true; } catch(_) {}
+    document.body.removeChild(ta);
+  }
+  const old = btn.textContent;
+  btn.classList.add('copied');
+  btn.textContent = ok ? 'Copied!' : 'Failed';
+  setTimeout(() => { btn.classList.remove('copied'); btn.textContent = old; }, 1000);
 });
 
 // handle back/forward (popstate)
