@@ -428,9 +428,9 @@ details {
 <h1>Mini Webhook Viewer</h1>
 <div class="card">
   <div class="toolbar">
-    <div><strong>ID:</strong> <code><?=h($id)?></code></div>
-    <div>Receive: <code><?=h($hookURL)?></code></div>
-    <div>View: <code><?=h($viewURL)?></code></div>
+    <div><strong>ID:</strong> <code><?=h($id)?></code> <button type="button" class="btn copy-btn js-copy" data-copy="<?=h($id)?>">Copy</button></div>
+    <div>Receive: <code><?=h($hookURL)?></code> <button type="button" class="btn copy-btn js-copy" data-copy="<?=h($hookURL)?>">Copy</button></div>
+    <div>View: <code><?=h($viewURL)?></code> <button type="button" class="btn copy-btn js-copy" data-copy="<?=h($viewURL)?>">Copy</button></div>
     <span style="flex:1"></span>
     <a class="gh-link" href="https://github.com/akhmadnuzula/webhook" target="_blank" rel="noopener">Public Repo</a>
     <label><input type="checkbox" id="auto"> Auto-refresh (2s)</label>
@@ -509,7 +509,7 @@ function insertPreviewRow(afterRow, html) {
   // Initialize relay URL input with saved value
   const urlInput = tr.querySelector('.relay-url');
   if (urlInput) {
-    urlInput.value = localStorage.getItem('relayURL') || 'http://127.0.0.1:8000/api/callback';
+    urlInput.value = localStorage.getItem('relayURL') || 'http://127.0.0.1:8000/api/midtrans-callback';
   }
 }
 
@@ -553,10 +553,15 @@ document.addEventListener('click', async (e) => {
   const btn = e.target.closest('button.js-copy');
   if (!btn) return;
   e.preventDefault();
-  const details = btn.closest('details');
-  const pre = details ? details.querySelector('pre') : null;
-  if (!pre) return;
-  const text = pre.innerText || pre.textContent || '';
+  let text = btn.getAttribute('data-copy');
+  if (!text) {
+    const details = btn.closest('details');
+    const pre = details ? details.querySelector('pre') : null;
+    if (pre) {
+      text = pre.innerText || pre.textContent || '';
+    }
+  }
+  if (!text) return;
   let ok = false;
   if (navigator.clipboard && navigator.clipboard.writeText) {
     try {
