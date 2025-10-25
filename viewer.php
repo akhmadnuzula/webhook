@@ -253,14 +253,18 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
 
   <div class="toolbar" style="margin:8px 0 12px 0">
     <input type="url" class="relay-url" placeholder="http://127.0.0.1:8000/api/midtrans-callback" style="flex:1;min-width:320px;padding:6px 8px;border-radius:8px;border:1px solid #3b3f46;background:#0b0f14;color:#e5e7eb" title="Target URL to forward using recorded headers/query/form/files/body">
-    <button type="button" class="btn js-send" title="Send with original headers, query, form/files, else JSON/raw">Send to URL</button>
+    <button type="button" class="btn js-send-browser" title="Send directly from your browser (client-side)">Send (Browser)</button>
   </div>
+  <span class="muted" style="font-size:12px">Client-side send: useful for localhost targets; ensure CORS is allowed by your app.</span>
 
   <p class="muted">From: <?=h($json['remote_addr'] ?? '-')?> – UA: <?=h($json['ua'] ?? '-')?></p>
   <details open>
     <summary><strong>Send Result</strong></summary>
     <pre class="relay-result muted" style="min-height:32px"></pre>
   </details>
+  <script type="application/json" class="record-data">
+  <?=h(json_encode($json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))?>
+  </script>
 </div>
 <?php
     return ob_get_clean();
@@ -650,14 +654,15 @@ document.querySelectorAll('.relay-url').forEach(inp => {
   inp.value = localStorage.getItem('relayURL') || 'http://127.0.0.1:8000/api/midtrans-callback';
 });
 
-// Handle relay send buttons (event delegation)
+// Removed server-side send button handler; using browser send only
+
+// Send from browser (client-side)
 document.addEventListener('click', async (e) => {
-  const btn = e.target.closest('button.js-send');
+  const btn = e.target.closest('button.js-send-browser');
   if (!btn) return;
   e.preventDefault();
   const card = btn.closest('.preview-card');
   if (!card) return;
-  const file = card.getAttribute('data-file') || '';
   const urlInput = card.querySelector('.relay-url');
   const resultPre = card.querySelector('.relay-result');
   const target = urlInput ? (urlInput.value || '') : '';
@@ -665,48 +670,131 @@ document.addEventListener('click', async (e) => {
     alert('Please enter a target URL');
     return;
   }
+  let record = {};
+  try {
+    const script = card.querySelector('script.record-data');
+    if (script) record = JSON.parse(script.textContent || '{}');
+  } catch (_) {}
+
+  // Build final URL with merged query
   try {
     localStorage.setItem('relayURL', target);
   } catch (_) {}
-
-  // Build form data for POST to viewer (server relays with cURL)
-  const fd = new FormData();
-  fd.set('action', 'relay');
-  fd.set('url', target);
-  fd.set('f', file);
-
-  if (resultPre) {
-    resultPre.textContent = 'Sending...';
+  const u = new URL(target, location.origin);
+  const recQuery = record.query || {};
+  for (const [k, v] of Object.entries(recQuery)) {
+    if (!u.searchParams.has(k)) {
+      if (Array.isArray(v)) {
+        v.forEach(item => u.searchParams.append(k, item));
+      } else if (v != null) {
+        u.searchParams.append(k, String(v));
+      }
+    }
   }
+
+  // Prepare headers (filtered to reduce CORS issues)
+  const headers = new Headers();
+  const orig = record.headers || {};
+  const skip = new Set(['host', 'content-length', 'transfer-encoding', 'connection', 'keep-alive', 'upgrade', 'accept-encoding', 'content-encoding', 'expect', 'origin', 'referer', 'cookie', 'cookie2', 'user-agent']);
+  for (const [k, v] of Object.entries(orig)) {
+    const lk = String(k).toLowerCase();
+    if (skip.has(lk)) continue;
+    if (lk.startsWith('sec-')) continue;
+    // Allow common auth/custom headers; note: may trigger CORS preflight
+    try {
+      headers.append(k, Array.isArray(v) ? v.join(', ') : String(v));
+    } catch (_) {}
+  }
+
+  // Build body and content-type
+  let method = 'POST';
+  let body = undefined;
+  let contentType = null;
+  const hasFiles = Array.isArray(record.files) && record.files.length > 0;
+  const hasForm = record.form && Object.keys(record.form).length > 0;
+  const hasJson = record.json && typeof record.json === 'object';
+  const raw = record.raw || '';
+
+  function buildUrlEncoded(obj, prefix) {
+    const params = new URLSearchParams();
+    const append = (o, pfx) => {
+      if (o && typeof o === 'object' && !Array.isArray(o)) {
+        for (const [k, v] of Object.entries(o)) {
+          const key = pfx ? `${pfx}[${k}]` : k;
+          append(v, key);
+        }
+      } else if (Array.isArray(o)) {
+        o.forEach((v, i) => append(v, `${pfx}[${i}]`));
+      } else if (pfx) {
+        params.append(pfx, o == null ? '' : String(o));
+      }
+    };
+    append(obj, prefix || '');
+    return params;
+  }
+
+  if (hasFiles) {
+    // Cannot resend saved files from browser; send form fields only as multipart
+    const fd = new FormData();
+    const fill = (o, pfx) => {
+      if (o && typeof o === 'object' && !Array.isArray(o)) {
+        for (const [k, v] of Object.entries(o)) {
+          const key = pfx ? `${pfx}[${k}]` : k;
+          fill(v, key);
+        }
+      } else if (Array.isArray(o)) {
+        o.forEach((v, i) => fill(v, `${pfx}[${i}]`));
+      } else if (pfx) {
+        fd.append(pfx, o == null ? '' : String(o));
+      }
+    };
+    fill(record.form || {}, '');
+    body = fd;
+    // Browser will set multipart/form-data boundary automatically
+  } else if (hasForm) {
+    const params = buildUrlEncoded(record.form);
+    body = params.toString();
+    contentType = 'application/x-www-form-urlencoded';
+  } else if (hasJson) {
+    body = JSON.stringify(record.json);
+    contentType = 'application/json';
+  } else {
+    body = String(raw || '');
+    contentType = (record.content_type || 'text/plain');
+  }
+
+  if (contentType) headers.set('Content-Type', contentType);
+
+  if (resultPre) resultPre.textContent = 'Sending (browser)...';
+  const t0 = performance.now();
   try {
-    const res = await fetch(viewURL, {
-      method: 'POST',
-      headers: {
-        'X-Requested-With': 'fetch'
-      },
-      body: fd
+    const res = await fetch(u.toString(), {
+      method,
+      headers,
+      body,
+      credentials: 'omit',
+      cache: 'no-store',
+      redirect: 'follow'
     });
-    const data = await res.json().catch(() => null);
-    if (!data) {
-      if (resultPre) resultPre.textContent = 'Invalid response';
-      return;
+    const dt = Math.round(performance.now() - t0);
+    let preview = '';
+    try {
+      preview = await res.text();
+    } catch (_) {
+      preview = '';
     }
-    if (data.ok) {
-      const sent = data.sent || {};
-      const lines = [
-        `Status: ${data.status} | Time: ${data.time_ms} ms | Bytes: ${data.bytes}`,
-        `Sent: ${sent.method || '-'} ${sent.url || ''}`,
-        `Content-Type: ${sent.content_type || '-'}`,
-        `Forwarded headers: ${sent.forwarded_headers ?? '-'}`,
-        '--- Response Preview ---',
-        (data.response_preview || '')
-      ];
-      if (resultPre) resultPre.textContent = lines.join('\n');
-    } else {
-      if (resultPre) resultPre.textContent = 'Error: ' + (data.error || 'Unknown error');
-    }
+    const lines = [
+      `Status: ${res.status} | Time: ${dt} ms`,
+      `Sent: ${method} ${u.toString()}`,
+      `Content-Type: ${contentType || '-'}`,
+      '--- Response Preview ---',
+      (preview || '')
+    ];
+    if (resultPre) resultPre.textContent = lines.join('\n');
   } catch (err) {
-    if (resultPre) resultPre.textContent = 'Fetch error: ' + err;
+    const msg = String(err || '');
+    const hint = 'If targeting localhost: ensure your app allows CORS and avoid mixed-content (https page -> http target).';
+    if (resultPre) resultPre.textContent = 'Browser send error: ' + msg + '\n' + hint;
   }
 });
 </script>
