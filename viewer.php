@@ -52,7 +52,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'relay
     $resp = ['ok' => false];
     try {
         $target = trim((string)($_POST['url'] ?? ''));
-        $mode   = ($_POST['mode'] ?? 'json') === 'raw' ? 'raw' : 'json';
         $fileBn = basename((string)($_POST['f'] ?? ''));
 
         if ($target === '') { throw new RuntimeException('URL is required'); }
@@ -67,26 +66,120 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'relay
         }
 
         $record = json_decode((string)file_get_contents($candidate), true) ?: [];
-        $body   = $mode === 'json'
-            ? json_encode($record['json'] ?? new stdClass, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
-            : (string)($record['raw'] ?? '');
-        $ctype  = $mode === 'json'
-            ? 'application/json'
-            : (string)($record['content_type'] ?? 'text/plain');
+
+        // Merge querystring: target URL existing query + recorded query
+        $recQuery = (array)($record['query'] ?? []);
+        $targetParts = parse_url($target);
+        $baseUrl = (isset($targetParts['scheme']) ? $targetParts['scheme'] . '://' : '')
+                 . ($targetParts['host'] ?? '')
+                 . (isset($targetParts['port']) ? ':' . $targetParts['port'] : '')
+                 . ($targetParts['path'] ?? '');
+        $targetQs = [];
+        if (!empty($targetParts['query'])) { parse_str($targetParts['query'], $targetQs); }
+        // recorded query should be added without overwriting explicit target params
+        $finalQs = $targetQs + $recQuery;
+        $targetFinal = $baseUrl . (empty($finalQs) ? '' : ('?' . http_build_query($finalQs)));
+
+        // Determine body/method/content-type based on recorded data
+        $hasFiles = !empty($record['files']);
+        $hasForm  = !empty($record['form']);
+        $hasJson  = is_array($record['json'] ?? null);
+        $rawBody  = (string)($record['raw'] ?? '');
+
+        $method = 'POST'; // default to POST for callbacks
+        $body = null;
+        $ctype = null;
+        $postFields = null; // for multipart
+
+        // Build outgoing body
+        if ($hasFiles) {
+            // multipart/form-data with form fields and files
+            $postFields = [];
+            // flatten form fields with bracket notation
+            $flatten = function($value, string $prefix = '') use (&$flatten, &$postFields) {
+                if (is_array($value)) {
+                    foreach ($value as $k => $v) {
+                        $key = $prefix === '' ? (string)$k : ($prefix . '[' . $k . ']');
+                        $flatten($v, $key);
+                    }
+                } else {
+                    if ($prefix !== '') $postFields[$prefix] = (string)$value;
+                }
+            };
+            $flatten($record['form'] ?? []);
+
+            // attach files from storage/id/uploads
+            $grouped = [];
+            foreach ((array)$record['files'] as $f) {
+                $fld = (string)($f['field'] ?? 'file');
+                $grouped[$fld][] = $f;
+            }
+            $uploadsDir = $uploads;
+            foreach ($grouped as $field => $list) {
+                foreach (array_values($list) as $i => $f) {
+                    $name = $f['name'] ?? 'file';
+                    $type = $f['type'] ?? '';
+                    $rel  = basename((string)($f['path'] ?? ''));
+                    $path = realpath($uploadsDir . '/' . $rel);
+                    if (!$path || !starts_with_path($path, realpath($uploadsDir)) || !is_file($path)) {
+                        continue;
+                    }
+                    $key = (count($list) > 1) ? ($field . '[' . $i . ']') : $field;
+                    $postFields[$key] = new CURLFile($path, $type ?: null, $name ?: null);
+                }
+            }
+            // let cURL set multipart content-type
+            $ctype = null;
+            $method = 'POST';
+        } elseif ($hasForm) {
+            // application/x-www-form-urlencoded
+            $body = http_build_query($record['form']);
+            $ctype = 'application/x-www-form-urlencoded';
+            $method = 'POST';
+        } elseif ($hasJson) {
+            // JSON body
+            $body = json_encode($record['json'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $ctype = 'application/json';
+            $method = 'POST';
+        } else {
+            // Raw body
+            $body = $rawBody;
+            $ctype = (string)($record['content_type'] ?? 'text/plain');
+            $method = 'POST';
+        }
 
         if (!function_exists('curl_init')) {
             throw new RuntimeException('cURL is not available on this PHP runtime');
         }
 
-        $ch = curl_init($target);
-        curl_setopt($ch, CURLOPT_POST, true);
+        $ch = curl_init($targetFinal);
+        curl_setopt($ch, CURLOPT_CUSTOMREQUEST, $method);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
         curl_setopt($ch, CURLOPT_HEADER, false);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, [
-            'Content-Type: ' . $ctype,
-            'User-Agent: Mini-Webhook-Viewer/1.0'
-        ]);
+        if ($postFields !== null) {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $postFields);
+        } else {
+            curl_setopt($ch, CURLOPT_POSTFIELDS, (string)$body);
+        }
+
+        // Build headers: forward original (filtered) + UA and Content-Type (unless multipart)
+        $origHeaders = (array)($record['headers'] ?? []);
+        $skip = [
+            'host','content-length','transfer-encoding','connection','keep-alive','upgrade',
+            'accept-encoding','content-encoding','expect','origin','referer'
+        ];
+        $hdrs = ['User-Agent: Mini-Webhook-Viewer/1.0'];
+        foreach ($origHeaders as $k => $v) {
+            $lk = strtolower((string)$k);
+            if (in_array($lk, $skip, true)) continue;
+            if ($postFields !== null && $lk === 'content-type') continue; // let cURL set multipart boundary
+            if ($ctype !== null && $lk === 'content-type') continue; // we will set our own below
+            $hdrs[] = $k . ': ' . (is_array($v) ? implode(', ', $v) : $v);
+        }
+        if ($postFields === null && $ctype !== null) {
+            $hdrs[] = 'Content-Type: ' . $ctype;
+        }
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $hdrs);
         curl_setopt($ch, CURLOPT_TIMEOUT, 15);
         curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
 
@@ -105,6 +198,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'relay
         $resp['status'] = $code;
         $resp['bytes'] = strlen((string)$out);
         $resp['time_ms'] = $tookMs;
+        $resp['sent'] = [
+            'url' => $targetFinal,
+            'method' => $method,
+            'content_type' => ($postFields !== null ? 'multipart/form-data' : ($ctype ?: null)),
+            'forwarded_headers' => count($hdrs)
+        ];
         // Limit response echo to avoid huge payloads in UI
         $resp['response_preview'] = substr((string)$out, 0, 4000);
     } catch (Throwable $e) {
@@ -153,9 +252,8 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
   </details>
 
   <div class="toolbar" style="margin:8px 0 12px 0">
-    <input type="url" class="relay-url" placeholder="http://127.0.0.1:8000/api/callback" style="flex:1;min-width:320px;padding:6px 8px;border-radius:8px;border:1px solid #3b3f46;background:#0b0f14;color:#e5e7eb" title="Target URL to forward the payload">
-    <button type="button" class="btn js-send" data-mode="json" title="Send parsed JSON as application/json">Send parsed JSON</button>
-    <button type="button" class="btn js-send" data-mode="raw" title="Send raw body with original Content-Type if available">Send raw body</button>
+    <input type="url" class="relay-url" placeholder="http://127.0.0.1:8000/api/midtrans-callback" style="flex:1;min-width:320px;padding:6px 8px;border-radius:8px;border:1px solid #3b3f46;background:#0b0f14;color:#e5e7eb" title="Target URL to forward using recorded headers/query/form/files/body">
+    <button type="button" class="btn js-send" title="Send with original headers, query, form/files, else JSON/raw">Send to URL</button>
   </div>
 
   <p class="muted">From: <?=h($json['remote_addr'] ?? '-')?> – UA: <?=h($json['ua'] ?? '-')?></p>
@@ -559,7 +657,6 @@ document.addEventListener('click', async (e) => {
   e.preventDefault();
   const card = btn.closest('.preview-card');
   if (!card) return;
-  const mode = btn.getAttribute('data-mode') === 'raw' ? 'raw' : 'json';
   const file = card.getAttribute('data-file') || '';
   const urlInput = card.querySelector('.relay-url');
   const resultPre = card.querySelector('.relay-result');
@@ -577,7 +674,6 @@ document.addEventListener('click', async (e) => {
   fd.set('action', 'relay');
   fd.set('url', target);
   fd.set('f', file);
-  fd.set('mode', mode);
 
   if (resultPre) {
     resultPre.textContent = 'Sending...';
@@ -596,8 +692,12 @@ document.addEventListener('click', async (e) => {
       return;
     }
     if (data.ok) {
+      const sent = data.sent || {};
       const lines = [
         `Status: ${data.status} | Time: ${data.time_ms} ms | Bytes: ${data.bytes}`,
+        `Sent: ${sent.method || '-'} ${sent.url || ''}`,
+        `Content-Type: ${sent.content_type || '-'}`,
+        `Forwarded headers: ${sent.forwarded_headers ?? '-'}`,
         '--- Response Preview ---',
         (data.response_preview || '')
       ];
