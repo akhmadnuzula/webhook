@@ -256,8 +256,6 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
     <button type="button" class="btn js-send-browser" title="Send directly from your browser (client-side)">Send (Browser)</button>
   </div>
   <span class="muted" style="font-size:12px">Client-side send: useful for localhost targets; ensure CORS is allowed by your app.</span>
-
-  <p class="muted">From: <?=h($json['remote_addr'] ?? '-')?> – UA: <?=h($json['ua'] ?? '-')?></p>
   <details open>
     <summary><strong>Send Result</strong></summary>
     <pre class="relay-result muted" style="min-height:32px"></pre>
