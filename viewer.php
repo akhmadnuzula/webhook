@@ -46,6 +46,74 @@ if ($selectedFileBasename) {
     }
 }
 
+// ====== Relay (proxy) to external URL to avoid CORS ======
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'relay') {
+    header('Content-Type: application/json; charset=utf-8');
+    $resp = ['ok' => false];
+    try {
+        $target = trim((string)($_POST['url'] ?? ''));
+        $mode   = ($_POST['mode'] ?? 'json') === 'raw' ? 'raw' : 'json';
+        $fileBn = basename((string)($_POST['f'] ?? ''));
+
+        if ($target === '') { throw new RuntimeException('URL is required'); }
+        $parts = @parse_url($target);
+        if (!$parts || !isset($parts['scheme']) || !in_array(strtolower($parts['scheme']), ['http','https'], true)) {
+            throw new RuntimeException('Invalid URL scheme');
+        }
+
+        $candidate = realpath($storage . '/' . $fileBn);
+        if (!$candidate || !is_file($candidate) || !starts_with_path($candidate, realpath($storage))) {
+            throw new RuntimeException('Invalid or missing file reference');
+        }
+
+        $record = json_decode((string)file_get_contents($candidate), true) ?: [];
+        $body   = $mode === 'json'
+            ? json_encode($record['json'] ?? new stdClass, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            : (string)($record['raw'] ?? '');
+        $ctype  = $mode === 'json'
+            ? 'application/json'
+            : (string)($record['content_type'] ?? 'text/plain');
+
+        if (!function_exists('curl_init')) {
+            throw new RuntimeException('cURL is not available on this PHP runtime');
+        }
+
+        $ch = curl_init($target);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_HEADER, false);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $body);
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: ' . $ctype,
+            'User-Agent: Mini-Webhook-Viewer/1.0'
+        ]);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+        curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+
+        $start = microtime(true);
+        $out = curl_exec($ch);
+        $err = curl_error($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $tookMs = (int)round((microtime(true) - $start) * 1000);
+        curl_close($ch);
+
+        if ($out === false) {
+            throw new RuntimeException('cURL error: ' . $err);
+        }
+
+        $resp['ok'] = true;
+        $resp['status'] = $code;
+        $resp['bytes'] = strlen((string)$out);
+        $resp['time_ms'] = $tookMs;
+        // Limit response echo to avoid huge payloads in UI
+        $resp['response_preview'] = substr((string)$out, 0, 4000);
+    } catch (Throwable $e) {
+        $resp['error'] = $e->getMessage();
+    }
+    echo json_encode($resp, JSON_UNESCAPED_SLASHES);
+    exit;
+}
+
 // ====== Render Preview (server-side snippet for AJAX or first load) ======
 function render_preview_block(?string $filePath, string $id, string $viewURL){
     if (!$filePath || !is_file($filePath)) {
@@ -53,7 +121,7 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
     }
     $json = json_decode(file_get_contents($filePath), true) ?: [];
     ob_start(); ?>
-<div class="card" id="preview-card">
+<div class="card preview-card" id="preview-card" data-file="<?=h(basename($filePath))?>">
   <h3 style="margin-top:0">Request Preview <span class="muted">(<?=h(basename($filePath))?>)</span></h3>
   <div><span class="pill"><?=h($json['method'] ?? '-')?></span> &nbsp; <?=h($json['timestamp'] ?? '-')?></div>
   <p class="muted" style="margin:6px 0"><?=h($json['path'] ?? '')?></p>
@@ -84,7 +152,17 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
     <p class="muted">Saved under <code>storage/<?=h($id)?>/uploads/</code></p>
   </details>
 
-  <p class="muted">From: <?=h($json['remote_addr'] ?? '-')?> — UA: <?=h($json['ua'] ?? '-')?></p>
+  <div class="toolbar" style="margin:8px 0 12px 0">
+    <input type="url" class="relay-url" placeholder="http://127.0.0.1:8000/api/callback" style="flex:1;min-width:320px;padding:6px 8px;border-radius:8px;border:1px solid #3b3f46;background:#0b0f14;color:#e5e7eb" title="Target URL to forward the payload">
+    <button type="button" class="btn js-send" data-mode="json" title="Send parsed JSON as application/json">Send parsed JSON</button>
+    <button type="button" class="btn js-send" data-mode="raw" title="Send raw body with original Content-Type if available">Send raw body</button>
+  </div>
+
+  <p class="muted">From: <?=h($json['remote_addr'] ?? '-')?> – UA: <?=h($json['ua'] ?? '-')?></p>
+  <details open>
+    <summary><strong>Send Result</strong></summary>
+    <pre class="relay-result muted" style="min-height:32px"></pre>
+  </details>
 </div>
 <?php
     return ob_get_clean();
@@ -226,6 +304,25 @@ details {
   color: #c4b5fd;
   text-decoration: underline;
 }
+
+/* Wrap and constrain relay/send result area */
+.relay-result {
+  white-space: pre-wrap;
+  /* allow wrapping while preserving newlines */
+  overflow-wrap: anywhere;
+  /* break long tokens */
+  word-break: break-word;
+  /* older browsers */
+  width: 100%;
+  /* fill container width */
+  max-width: 100%;
+  overflow-x: hidden;
+  /* avoid horizontal scroll */
+  max-height: 320px;
+  /* cap height */
+  overflow-y: auto;
+  /* vertical scroll if long */
+}
 </style>
 
 <h1>Mini Webhook Viewer</h1>
@@ -309,6 +406,11 @@ function insertPreviewRow(afterRow, html) {
   td.innerHTML = html;
   tr.appendChild(td);
   afterRow.insertAdjacentElement('afterend', tr);
+  // Initialize relay URL input with saved value
+  const urlInput = tr.querySelector('.relay-url');
+  if (urlInput) {
+    urlInput.value = localStorage.getItem('relayURL') || 'http://127.0.0.1:8000/api/callback';
+  }
 }
 
 // intercept clicks on file links
@@ -369,13 +471,19 @@ document.addEventListener('click', async (e) => {
     ta.style.opacity = '0';
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand('copy'); ok = true; } catch(_) {}
+    try {
+      document.execCommand('copy');
+      ok = true;
+    } catch (_) {}
     document.body.removeChild(ta);
   }
   const old = btn.textContent;
   btn.classList.add('copied');
   btn.textContent = ok ? 'Copied!' : 'Failed';
-  setTimeout(() => { btn.classList.remove('copied'); btn.textContent = old; }, 1000);
+  setTimeout(() => {
+    btn.classList.remove('copied');
+    btn.textContent = old;
+  }, 1000);
 });
 
 // handle back/forward (popstate)
@@ -438,4 +546,67 @@ async function refreshList() {
   } catch (e) {}
 }
 setInterval(refreshList, 2000);
+
+// Initialize URL input on first render (server-side rendered preview if any)
+document.querySelectorAll('.relay-url').forEach(inp => {
+  inp.value = localStorage.getItem('relayURL') || 'http://127.0.0.1:8000/api/midtrans-callback';
+});
+
+// Handle relay send buttons (event delegation)
+document.addEventListener('click', async (e) => {
+  const btn = e.target.closest('button.js-send');
+  if (!btn) return;
+  e.preventDefault();
+  const card = btn.closest('.preview-card');
+  if (!card) return;
+  const mode = btn.getAttribute('data-mode') === 'raw' ? 'raw' : 'json';
+  const file = card.getAttribute('data-file') || '';
+  const urlInput = card.querySelector('.relay-url');
+  const resultPre = card.querySelector('.relay-result');
+  const target = urlInput ? (urlInput.value || '') : '';
+  if (!target) {
+    alert('Please enter a target URL');
+    return;
+  }
+  try {
+    localStorage.setItem('relayURL', target);
+  } catch (_) {}
+
+  // Build form data for POST to viewer (server relays with cURL)
+  const fd = new FormData();
+  fd.set('action', 'relay');
+  fd.set('url', target);
+  fd.set('f', file);
+  fd.set('mode', mode);
+
+  if (resultPre) {
+    resultPre.textContent = 'Sending...';
+  }
+  try {
+    const res = await fetch(viewURL, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'fetch'
+      },
+      body: fd
+    });
+    const data = await res.json().catch(() => null);
+    if (!data) {
+      if (resultPre) resultPre.textContent = 'Invalid response';
+      return;
+    }
+    if (data.ok) {
+      const lines = [
+        `Status: ${data.status} | Time: ${data.time_ms} ms | Bytes: ${data.bytes}`,
+        '--- Response Preview ---',
+        (data.response_preview || '')
+      ];
+      if (resultPre) resultPre.textContent = lines.join('\n');
+    } else {
+      if (resultPre) resultPre.textContent = 'Error: ' + (data.error || 'Unknown error');
+    }
+  } catch (err) {
+    if (resultPre) resultPre.textContent = 'Fetch error: ' + err;
+  }
+});
 </script>
