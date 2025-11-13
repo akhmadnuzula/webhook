@@ -261,7 +261,15 @@ function render_preview_block(?string $filePath, string $id, string $viewURL){
     <pre class="relay-result muted" style="min-height:32px"></pre>
   </details>
   <script type="application/json" class="record-data">
-  <?=h(json_encode($json, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE))?>
+  <?=json_encode(
+        $json,
+        JSON_UNESCAPED_SLASHES
+        | JSON_UNESCAPED_UNICODE
+        | JSON_HEX_TAG
+        | JSON_HEX_AMP
+        | JSON_HEX_APOS
+        | JSON_HEX_QUOT
+    )?>
   </script>
 </div>
 <?php
